@@ -414,27 +414,6 @@ function compressImage(dataUrl, maxSize=400, quality=0.7){
   });
 }
 
-async function loadFromFirebase(){
-  setStatus('⏳ جاري التحميل...','#FFD700');
-  try {
-    const [treeSnap, photoSnap] = await Promise.all([
-      get(ref(db, DB_TREE)),
-      get(ref(db, DB_PHOTOS))
-    ]);
-
-    const treeData = treeSnap.exists() ? treeSnap.val() : clone(ORIG);
-    photos = photoSnap.exists() ? (photoSnap.val()||{}) : {};
-
-    setStatus('✅ تم التحميل','#81C784');
-    setTimeout(()=>setStatus('🔥 متصل بـ Firebase','#81C784'),2000);
-    return treeData;
-  } catch(e){
-    console.error(e);
-    setStatus('⚠️ خطأ في التحميل — عرض البيانات الأصلية','#FFB74D');
-    return clone(ORIG);
-  }
-}
-
 // Live listener — يحمّل البيانات أول مرة ويراقب التغييرات بعدها
 let fbInitDone = false;
 let fbSaving = false;  // منع الـ listener من تجاوز حفظنا
