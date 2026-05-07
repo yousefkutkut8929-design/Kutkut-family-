@@ -293,6 +293,7 @@ button, .nbox { touch-action:manipulation; }
 
 <div id="ibar">
   <span id="nc"></span>
+  <span id="fb-status" style="color:#81C784;font-weight:600;">⏳ جاري الاتصال...</span>
   <span>🖱 اسحب • عجلة/قرص للتكبير • انقر للطي • اضغط مطولاً للخيارات</span>
   <span style="margin-right:auto;display:flex;gap:6px;align-items:center;flex-wrap:wrap;">
     <span><span class="dot" style="background:#B8860B"></span>الأول</span>
@@ -308,7 +309,14 @@ button, .nbox { touch-action:manipulation; }
   </span>
 </div>
 
-<script>
+<script type="module">
+// ══════════════════════════════════════════
+// FIREBASE IMPORTS (must be first)
+// ══════════════════════════════════════════
+import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
+import { getDatabase, ref, set, onValue, get } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-database.js";
+import { getStorage, ref as sRef, uploadString, getDownloadURL } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-storage.js";
+
 // ══════════════════════════════════════════
 // DATA
 // ══════════════════════════════════════════
@@ -318,25 +326,40 @@ const SK='katkat_v4';
 const GENS=['الجيل الأول','الجيل الثاني','الجيل الثالث','الجيل الرابع','الجيل الخامس','الجيل السادس','الجيل السابع','الجيل الثامن','الجيل التاسع','الجيل العاشر'];
 const LCOLS=['#B8860B','#BF360C','#1B5E20','#0D47A1','#880E4F','#006064','#E65100','#4A148C','#1B5E20','#B71C1C'];
 
-// photo store: {id -> dataURL}
 let photos = {};
 
 // ══════════════════════════════════════════
-// PERSISTENCE
+// FIREBASE SETUP
 // ══════════════════════════════════════════
-function loadData(){
-  try{
-    const s=localStorage.getItem(SK);
-    if(!s) return {tree:clone(ORIG),photos:{}};
-    return JSON.parse(s);
-  }catch(e){ return {tree:clone(ORIG),photos:{}}; }
+const firebaseConfig = {
+  apiKey: "AIzaSyCkkUc5Gl8COVFjm_ndPhCT77etPTRVm74",
+  authDomain: "kutkut-family.firebaseapp.com",
+  databaseURL: "https://kutkut-family-default-rtdb.firebaseio.com",
+  projectId: "kutkut-family",
+  storageBucket: "kutkut-family.firebasestorage.app",
+  messagingSenderId: "68722275134",
+  appId: "1:68722275134:web:4f27bd4f7549443859b26f",
+  measurementId: "G-MNDKREFQN3"
+};
+
+const fbApp  = initializeApp(firebaseConfig);
+const db     = getDatabase(fbApp);
+const storage= getStorage(fbApp);
+
+const DB_TREE   = 'katkat/tree';
+const DB_PHOTOS = 'katkat/photos';
+
+// ── Status indicator ──
+function setStatus(msg, color='#C8A96E'){
+  const el=document.getElementById('fb-status');
+  if(el){ el.textContent=msg; el.style.color=color; }
 }
-function saveAll(){
-  const obj={tree:treeToObj(0),photos};
-  try{ localStorage.setItem(SK,JSON.stringify(obj)); flashSaved(); }
-  catch(e){ alert('تعذّر الحفظ — قد تكون الصور كبيرة جداً. حاول بصور أصغر.'); }
-}
+
+// ══════════════════════════════════════════
+// PERSISTENCE  (Firebase)
+// ══════════════════════════════════════════
 function clone(o){ return JSON.parse(JSON.stringify(o)); }
+
 function treeToObj(id){
   const n=nodes[id];
   const kids=nodes.filter(c=>c.pid===id);
@@ -344,6 +367,74 @@ function treeToObj(id){
   if(kids.length) o.children=kids.map(c=>treeToObj(c.id));
   return o;
 }
+
+async function saveAll(){
+  setStatus('⏳ جاري الحفظ...','#FFD700');
+  try {
+    const treeObj = treeToObj(0);
+    await set(ref(db, DB_TREE), treeObj);
+    // Save photos that are base64 (newly uploaded this session)
+    const photoUpdates = {};
+    for(const [id, url] of Object.entries(photos)){
+      if(url && url.startsWith('data:')){
+        // Upload to Storage
+        const imgRef = sRef(storage, `katkat/photos/${id}.jpg`);
+        await uploadString(imgRef, url, 'data_url');
+        const dlUrl = await getDownloadURL(imgRef);
+        photos[id] = dlUrl;
+        photoUpdates[id] = dlUrl;
+      } else if(url) {
+        photoUpdates[id] = url;
+      }
+    }
+    await set(ref(db, DB_PHOTOS), photoUpdates);
+    flashSaved();
+    setStatus('✅ محفوظ على السحابة','#81C784');
+    setTimeout(()=>setStatus('🔥 متصل بـ Firebase','#81C784'),3000);
+  } catch(e){
+    console.error(e);
+    setStatus('❌ فشل الحفظ: '+e.message,'#FF8A80');
+  }
+}
+
+async function loadFromFirebase(){
+  setStatus('⏳ جاري التحميل...','#FFD700');
+  try {
+    const [treeSnap, photoSnap] = await Promise.all([
+      get(ref(db, DB_TREE)),
+      get(ref(db, DB_PHOTOS))
+    ]);
+
+    const treeData = treeSnap.exists() ? treeSnap.val() : clone(ORIG);
+    photos = photoSnap.exists() ? (photoSnap.val()||{}) : {};
+
+    setStatus('✅ تم التحميل','#81C784');
+    setTimeout(()=>setStatus('🔥 متصل بـ Firebase','#81C784'),2000);
+    return treeData;
+  } catch(e){
+    console.error(e);
+    setStatus('⚠️ خطأ في التحميل — عرض البيانات الأصلية','#FFB74D');
+    return clone(ORIG);
+  }
+}
+
+// Live listener — refresh tree when another user saves
+onValue(ref(db, DB_TREE), (snapshot)=>{
+  if(!snapshot.exists()) return;
+  if(!fbInitDone) return; // skip first fire (handled by loadFromFirebase)
+  // Re-build tree from new data
+  const newTree = snapshot.val();
+  get(ref(db, DB_PHOTOS)).then(ps=>{
+    photos = ps.exists() ? (ps.val()||{}) : {};
+    nodes=[]; idSeq=0;
+    world.querySelectorAll('.nw').forEach(e=>e.remove());
+    buildNodes(newTree, null, 0);
+    layout(); render();
+    setStatus('🔄 تم التحديث من مستخدم آخر','#64B5F6');
+    setTimeout(()=>setStatus('🔥 متصل بـ Firebase','#81C784'),3000);
+  });
+});
+let fbInitDone=false;
 
 // ══════════════════════════════════════════
 // NODE STATE
@@ -354,10 +445,8 @@ let nodes=[], idSeq=0;
 const NW=120, NH_BASE=36, GAPX=22, GAPY=80;
 function nodeH(id){ return photos[id] ? 86 : NH_BASE; }
 
-function loadData2(){
-  const d=loadData();
-  photos=d.photos||{};
-  return d.tree;
+async function loadData2(){
+  return await loadFromFirebase();
 }
 
 function buildNodes(obj,pid,depth){
@@ -693,9 +782,11 @@ function doDelete(){
 // ══════════════════════════════════════════
 // RESET
 // ══════════════════════════════════════════
-function resetTree(){
+async function resetTree(){
   if(!confirm('هل تريد حذف جميع التعديلات والرجوع للبيانات الأصلية؟'))return;
-  localStorage.removeItem(SK); photos={};
+  photos={};
+  await set(ref(db, DB_TREE), clone(ORIG));
+  await set(ref(db, DB_PHOTOS), {});
   initTree(clone(ORIG));
 }
 
@@ -743,8 +834,12 @@ function initTree(data){
 window.addEventListener('resize',fitView);
 document.addEventListener('keydown',e=>{ if(e.key==='Escape'){closeAdd();closeEdit();hideCtx();} });
 
-const startData=loadData2();
-initTree(startData);
+// Async startup — load from Firebase first
+(async ()=>{
+  const startData = await loadData2();
+  initTree(startData);
+  fbInitDone = true;
+})();
 </script>
 </body>
 </html>
